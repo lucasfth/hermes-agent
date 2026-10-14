@@ -944,7 +944,8 @@ class AIAgent(
         _quietly(self.shutdown_memory_provider, session_messages if isinstance(session_messages, list) else None)
         self._close_task_resources(getattr(self, "session_id", None) or "")
         self._close_active_children(soft=False)
-        _quietly(self._drop_shared_client, lambda c: self._close_openai_client(c, reason="agent_close", shared=True))
+        # A hard SDK close from this thread may free TLS FDs still borrowed by stale workers.
+        _quietly(self._drop_shared_client, lambda c: self._retire_shared_openai_client(c, reason="agent_close"))
         self._close_request_clients("agent_close")
         _quietly(self._close_codex_session)
         # Free conversation history proactively: callers may still hold the closed agent. The DB-flush
@@ -982,10 +983,11 @@ class AIAgent(
         # FDs under a still-unwinding worker (FD-recycle → SQLite corruption). Retirement shuts the pooled
         # sockets down (the memory/socket win we want here) and lets GC release the FDs once no thread holds
         # them.
-        client = getattr(self, "client", None)
+        with self._openai_client_lock():
+            client = getattr(self, "client", None)
+            self.client = None
         if client is not None:
             close_fn(client)
-            self.client = None
 
     def _close_request_clients(self, reason: str) -> None:
         """Drop the cached per-request wire clients (reused across sequential LLM calls)."""

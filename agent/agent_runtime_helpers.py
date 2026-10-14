@@ -2487,7 +2487,11 @@ def switch_model(
             agent, new_model, new_provider, api_key, base_url, api_mode, old_provider, old_norm, new_norm
         )
     except Exception:
+        candidate = getattr(agent, "client", None)
+        previous = snapshot.get("client", _MISSING)
         _restore_switch_snapshot(agent, snapshot)
+        if candidate is not None and candidate is not previous:
+            agent._retire_shared_openai_client(candidate, reason="switch_model_rollback")
         raise
     custom_providers, effective_context_length = _resolve_switch_context_length(agent, snapshot)
     # Refresh the custom-provider snapshot from the config just loaded so the prompt_caching lookup
@@ -2521,6 +2525,9 @@ def switch_model(
     _reset_stale_streak(agent)
     agent._primary_runtime = _build_primary_runtime_snapshot(agent, api_mode)
     _finish_switch(agent, new_provider, old_norm, new_norm)
+    previous = snapshot.get("client", _MISSING)
+    if previous is not _MISSING and previous is not None and previous is not getattr(agent, "client", None):
+        agent._retire_shared_openai_client(previous, reason="switch_model")
     logger.info(
         "Model switched in-place: %s (%s) -> %s (%s)",
         old_model, old_provider, new_model, new_provider,
@@ -3808,7 +3815,12 @@ def _shutdown_socket(sock: Any) -> None:
         if callable(settimeout):
             with contextlib.suppress(OSError):
                 settimeout(0)
-        sock.shutdown(_socket.SHUT_RDWR)
+        if isinstance(sock, _socket.socket):
+            # SSLSocket.shutdown() clears _sslobj and can free TLS state under
+            # another thread's SSL_read. Shut down TCP without touching TLS.
+            _socket.socket.shutdown(sock, _socket.SHUT_RDWR)
+        else:
+            sock.shutdown(_socket.SHUT_RDWR)
     except OSError:
         pass
 
