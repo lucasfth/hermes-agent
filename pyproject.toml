@@ -47,6 +47,8 @@ dependencies = [
   # Keep this exact until that path has a public-API replacement.
   "truststore==0.10.4; python_version >= '3.14'",
   "python-dotenv==1.2.2; python_version >= '3.14'",
+  "dnspython==2.8.0; python_version >= '3.14'",  # Local public-DNS recovery in hermes_bootstrap.
+  "PyYAML==6.0.3; python_version >= '3.14'",  # Local plugins and MCP services still import yaml.
   "fire==0.7.1; python_version >= '3.14'",
   "httpx[socks]==0.28.1; python_version >= '3.14'",
   "rich==14.3.3; python_version >= '3.14'",

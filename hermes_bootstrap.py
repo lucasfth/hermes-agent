@@ -18,6 +18,7 @@ from __future__ import annotations
 import errno
 import importlib.abc
 import importlib.util
+import ipaddress
 import os
 import selectors
 import socket
@@ -28,6 +29,94 @@ _IS_WINDOWS = sys.platform == "win32"
 _bootstrap_applied = False
 _HAPPY_EYEBALLS_DELAY_SECONDS = 0.25
 _URLLIB3_CONNECTION_MODULE = "urllib3.util.connection"
+
+
+def install_host_overrides(path: Path) -> None:
+    """Apply explicit private host mappings without changing URLs or TLS names."""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    hosts = {}
+    for line in lines:
+        fields = line.partition("#")[0].split()
+        if len(fields) < 2:
+            continue
+        try:
+            address = str(ipaddress.ip_address(fields[0]))
+        except ValueError:
+            continue
+        for host in fields[1:]:
+            hosts[host.lower().rstrip(".")] = address
+    if not hosts:
+        return
+    original = getattr(socket.getaddrinfo, "_hermes_original_resolver", socket.getaddrinfo)
+
+    def resolve(host, port, family=0, type=0, proto=0, flags=0):
+        name = host.decode("ascii") if isinstance(host, bytes) else host
+        address = hosts.get(name.lower().rstrip(".")) if isinstance(name, str) else None
+        if address is None or flags & socket.AI_NUMERICHOST:
+            return original(host, port, family, type, proto, flags)
+        result = original(address, port, family, type, proto, flags | socket.AI_NUMERICHOST)
+        if flags & socket.AI_CANONNAME:
+            result = [(af, socktype, protocol, name, sockaddr)
+                      for af, socktype, protocol, _canonical, sockaddr in result]
+        return result
+
+    resolve._hermes_original_resolver = original
+    socket.getaddrinfo = resolve
+
+
+def install_public_dns(path: Path) -> None:
+    """Use an explicit bounded resolver for public names, retaining local DNS."""
+    try:
+        nameservers = [str(ipaddress.ip_address(line.partition("#")[0].strip()))
+                       for line in path.read_text(encoding="utf-8").splitlines()
+                       if line.partition("#")[0].strip()]
+    except (OSError, ValueError):
+        return
+    if not nameservers:
+        return
+    import dns.exception
+    import dns.resolver
+
+    resolver = dns.resolver.Resolver(configure=False)
+    resolver.nameservers = nameservers
+    resolver.timeout = 1.0
+    resolver.lifetime = 3.0
+    resolver.cache = dns.resolver.Cache()
+    original = getattr(socket.getaddrinfo, "_hermes_original_resolver", socket.getaddrinfo)
+
+    def resolve(host, port, family=0, type=0, proto=0, flags=0):
+        name = host.decode("ascii") if isinstance(host, bytes) else host
+        if not isinstance(name, str) or flags & socket.AI_NUMERICHOST:
+            return original(host, port, family, type, proto, flags)
+        try:
+            ipaddress.ip_address(name)
+            return original(host, port, family, type, proto, flags)
+        except ValueError:
+            pass
+        name = name.rstrip(".").lower()
+        if "." not in name or name.endswith((".localhost", ".local", ".internal", ".ts.net")):
+            return original(host, port, family, type, proto, flags)
+        try:
+            answers = resolver.resolve_name(name.encode("idna").decode("ascii"), family)
+        except dns.resolver.NXDOMAIN as exc:
+            raise socket.gaierror(socket.EAI_NONAME, "Name or service not known") from exc
+        except dns.exception.DNSException as exc:
+            raise socket.gaierror(socket.EAI_AGAIN, "Public DNS resolution failed") from exc
+        result = []
+        for address, answer_family in answers.addresses_and_families():
+            result.extend(original(address, port, answer_family, type, proto, flags | socket.AI_NUMERICHOST))
+        if not result:
+            raise socket.gaierror(socket.EAI_NONAME, "No addresses returned")
+        if flags & socket.AI_CANONNAME:
+            result = [(af, socktype, protocol, name, sockaddr)
+                      for af, socktype, protocol, _canonical, sockaddr in result]
+        return result
+
+    resolve._hermes_public_dns = True
+    socket.getaddrinfo = resolve
 
 
 def _interleave_addrinfos(addrinfos: list[tuple]) -> list[tuple]:
@@ -506,6 +595,7 @@ def _legacy_post_swap_invocation(argv: list[str]) -> tuple[Path, list[str]] | No
 # editable-installed from a pre-PM tree maps only the top-level packages it knew then:
 # without this, ``pm`` is unimportable and the launch silently skips PM adoption.
 harden_import_path(str(_root))
+install_host_overrides(Path(os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes")) / "hosts.override")
 
 
 def _settle_interrupted_update() -> None:
@@ -618,5 +708,8 @@ if not _pm_repair:
         if command_argv(sys.argv[1:])[:1] != ["pm"]:
             print(f"hermes: {exc}; run `hermes pm repair`", file=sys.stderr)
             raise SystemExit(1) from None
+_dns_home = Path(os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes"))
+install_public_dns(_dns_home / "dns-resolvers")
+install_host_overrides(_dns_home / "hosts.override")
 install_happy_eyeballs_socket_connect()
 export_scratch_tmp_env()
