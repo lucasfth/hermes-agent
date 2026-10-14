@@ -543,6 +543,10 @@ def resolve_provider_full(name: str, user_providers: Optional[dict[str, Any]] = 
         user_pdef = resolve_user_provider(raw, user_providers)
         if user_pdef is not None:
             return user_pdef
+    if raw.startswith("custom:"):
+        custom_pdef = resolve_custom_provider(name, custom_providers)
+        if custom_pdef is not None:
+            return custom_pdef
     if canonical != raw:
         pdef = _lossy_alias_registry_pdef(raw, canonical)
         if pdef is not None:

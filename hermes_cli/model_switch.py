@@ -1403,6 +1403,10 @@ def _route_from_model_input(st: _Switch) -> Optional[ModelSwitchResult]:
 
 
 def _switch_provider_label(st: _Switch) -> str:
+    if st.target_provider in (st.user_providers or {}) or st.target_provider.startswith("custom:"):
+        configured = resolve_provider_full(st.target_provider, st.user_providers, st.custom_providers)
+        if configured is not None:
+            return configured.name
     label = get_label(st.target_provider)
     if st.target_provider == "custom" and st.current_base_url:
         label = "Custom endpoint"
@@ -1630,6 +1634,12 @@ def _validate_switch(st: _Switch) -> Optional[ModelSwitchResult]:
         # validation branch (#120020; mirrors ``_lap_lmstudio_row``'s endpoint test).
         if pdef is not None and pdef.source == "user-config" and (pdef.base_url or ""):
             validate_as = f"custom:{validate_as}"
+    if validate_as.lower().startswith("custom") and _config_declares_model(
+            st.new_model, st.target_provider, st.base_url, st.user_providers, st.custom_providers):
+        # A saved catalog admits this model for the exact configured route; selection must not
+        # depend on the endpoint being online or returning fresh discovery metadata.
+        st.validation = {"accepted": True, "persist": True, "recognized": True, "message": ""}
+        return None
     try:
         validation = validate_requested_model(
             st.new_model, validate_as, api_key=st.api_key, base_url=st.base_url,
@@ -1709,12 +1719,14 @@ def _build_switch_result(st: _Switch) -> ModelSwitchResult:
     if opencode_provider_family(st.target_provider) is not None and isinstance(st.base_url, str):
         st.base_url = normalize_opencode_base_url(st.target_provider, st.api_mode, st.base_url)
 
-    capabilities = get_model_capabilities(st.target_provider, st.new_model, allow_network=True)
+    allow_network = not _config_declares_model(
+        st.new_model, st.target_provider, st.base_url, st.user_providers, st.custom_providers)
+    capabilities = get_model_capabilities(st.target_provider, st.new_model, allow_network=allow_network)
     from agent.native_compaction import resolve_native_compaction_capabilities
     runtime_capabilities = resolve_native_compaction_capabilities(
         model=st.new_model, base_url=st.base_url, provider=st.target_provider,
         is_codex_backend=st.target_provider.strip().lower() == "openai-codex")
-    model_info = get_model_info(st.target_provider, st.new_model, allow_network=True)
+    model_info = get_model_info(st.target_provider, st.new_model, allow_network=allow_network)
 
     warnings = [w for w in (st.validation.get("message"), _check_hermes_model_warning(st.new_model)) if w]
 
