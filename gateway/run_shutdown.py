@@ -1493,11 +1493,30 @@ class GatewayShutdownMixin(GatewaySessionEndMixin):
             f"while kill -0 {current_pid} 2>/dev/null && [ $(date +%s) -lt $deadline ]; do sleep 0.2; done; "
             f"{cmd} gateway restart"
         )
+        watcher_env = GatewayShutdownMixin._restart_watcher_env()
+        # Resolve bash before giving the watcher its sanitized environment: on
+        # Termux that PATH can omit the shell's directory.
+        bash_bin = shutil.which("bash", path=watcher_env.get("PATH")) or shutil.which("bash")
+        if not bash_bin:
+            prefix = os.environ.get("PREFIX", "")
+            candidates = (
+                os.environ.get("BASH"),
+                os.environ.get("SHELL"),
+                str(Path(prefix) / "bin" / "bash") if prefix else None,
+                "/bin/bash",
+            )
+            bash_bin = next((
+                candidate for candidate in candidates
+                if candidate and Path(candidate).name == "bash"
+                and os.path.isfile(candidate) and os.access(candidate, os.X_OK)
+            ), None)
+        if not bash_bin:
+            raise FileNotFoundError("Could not locate bash for detached /restart")
         setsid_bin = shutil.which("setsid")
-        argv = [setsid_bin, "bash", "-lc", shell_cmd] if setsid_bin else ["bash", "-lc", shell_cmd]
+        argv = [setsid_bin, bash_bin, "-lc", shell_cmd] if setsid_bin else [bash_bin, "-lc", shell_cmd]
         subprocess.Popen(  # noqa: ASYNC220 -- fire-and-forget spawn; Popen returns immediately and callers need the Popen object
             argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            env=GatewayShutdownMixin._restart_watcher_env(), start_new_session=True,
+            env=watcher_env, start_new_session=True,
         )
 
     def _wedged_agent_count(self) -> int:

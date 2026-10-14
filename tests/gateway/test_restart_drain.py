@@ -1,4 +1,5 @@
 import asyncio
+import shutil
 import subprocess
 import time
 from datetime import datetime
@@ -340,6 +341,45 @@ async def test_windows_detached_restart_scrubs_gateway_marker(monkeypatch, tmp_p
     assert cmd[:3] == runtime_command(Path(gateway_run.__file__).resolve().parent.parent)[:3]
     assert kwargs["stdout"] is subprocess.DEVNULL
     assert kwargs["stderr"] is subprocess.DEVNULL
+
+@pytest.mark.asyncio
+async def test_unix_detached_restart_uses_absolute_bash_from_parent_path(monkeypatch, tmp_path):
+    """Resolve bash before spawning with the watcher’s sanitized environment."""
+    runner, _adapter = make_restart_runner()
+    popen_calls = []
+    bash_path = tmp_path / "termux-prefix" / "bin" / "bash"
+    bash_path.parent.mkdir(parents=True)
+    bash_path.write_text("#!/bin/sh\n", encoding="utf-8")
+    bash_path.chmod(0o755)
+
+    monkeypatch.setattr(gateway_run, "_resolve_hermes_bin", lambda: ["hermes"])
+    monkeypatch.setattr(gateway_run.os, "getpid", lambda: 321)
+    monkeypatch.setattr(gateway_run.sys, "platform", "linux")
+    monkeypatch.setenv("SHELL", str(bash_path))
+    monkeypatch.setattr(
+        gateway_run.GatewayShutdownMixin,
+        "_restart_watcher_env",
+        staticmethod(lambda: {"PATH": "$HOME/.local/bin:$PATH"}),
+    )
+
+    def fake_which(name, *args, **kwargs):
+        if name in {"bash", "setsid"}:
+            return None
+        return shutil.which(name, *args, **kwargs)
+
+    monkeypatch.setattr(shutil, "which", fake_which)
+
+    def fake_popen(cmd, **kwargs):
+        popen_calls.append((cmd, kwargs))
+        return MagicMock()
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    await runner._launch_detached_restart_command()
+
+    assert len(popen_calls) == 1
+    cmd, kwargs = popen_calls[0]
+    assert cmd[0] == str(bash_path)
+    assert kwargs["env"]["PATH"] == "$HOME/.local/bin:$PATH"
 
 
 @pytest.mark.platforms("windows")
