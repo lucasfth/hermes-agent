@@ -24,9 +24,11 @@ def runtime_environment() -> dict[str, str]:
     from hermes_constants import get_hermes_home
     from pm.paths import store_root
 
-    from pm.environment import _base_environment
+    from pm.environment import _base_environment, _interpreter_environment
+    from pm._uv import _toolchain
 
-    env = _base_environment()
+    tools = _toolchain(realize=False)
+    env = _interpreter_environment(tools[1]) if tools is not None else _base_environment()
     env["HERMES_HOME"] = str(get_hermes_home())
     env["HERMES_RUNTIME_DIR"] = native(store_root())
     return env

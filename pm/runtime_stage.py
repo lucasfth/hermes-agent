@@ -18,13 +18,13 @@ def stage_runtime(uv: Path, python: Path, destination: Path, *,
     The scratch project prevents uv from discovering the application's workspace.
     No project install, application extra, or application lock enters this graph.
     """
-    from pm.environment import PythonEnvironment
+    from pm.environment import PythonEnvironment, _interpreter_environment
     from pm.packages import uv_cache_dir
     from pm.runtime import runtime_environment
 
     project = project or Path(__file__).resolve().parent
     destination = destination.absolute()
-    env = runtime_environment()
+    env = _interpreter_environment(python, runtime_environment())
     environment = PythonEnvironment(
         uv=uv, python=python, destination=destination,
         cache=uv_cache_dir() if cache is None else cache.absolute(), env=env,

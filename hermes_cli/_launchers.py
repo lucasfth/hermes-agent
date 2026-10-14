@@ -35,6 +35,13 @@ def _inline_string_literal(value: str) -> str:
     return "'" + escaped.replace("'", "\\x27").replace('"', "\\x22") + "'"
 
 
+def _termux_library(python: str | Path) -> Path | None:
+    prefix = Path(python).resolve().parent.parent
+    if prefix.as_posix().endswith("/data/data/com.termux/files/usr"):
+        return prefix / "lib"
+    return None
+
+
 def runtime_command(repo_root: Path, args=(), *, module: str = "hermes_cli.main",
                     code: str | None = None, python: str | Path | None = None,
                     home: str | Path | None = None) -> list[str]:
@@ -68,7 +75,13 @@ def runtime_command(repo_root: Path, args=(), *, module: str = "hermes_cli.main"
         + settle
         + entry
     )
-    return [str(python), "-I", "-c", bootstrap, *args]
+    command = [str(python), "-I", "-c", bootstrap, *args]
+    library = _termux_library(python)
+    if library is not None:
+        suffix = os.environ.get("LD_LIBRARY_PATH", "")
+        loader_path = str(library) + (os.pathsep + suffix if suffix else "")
+        command = ["/data/data/com.termux/files/usr/bin/env", f"LD_LIBRARY_PATH={loader_path}", *command]
+    return command
 
 
 def print_runtime_command(repo_root: Path, argv: list[str]) -> None:
@@ -131,7 +144,8 @@ def resolve_store_python(repo_root: Path, *, publication: bool = False) -> Path 
 
 
 def _store_python(runtime: Path) -> Path | None:
-    rel = "python.exe" if _is_windows() else "bin/python3"
+    from pm.registry import get_package
+    from pm.store import current_target
 
     facts = runtime / "facts.json"
     if facts.is_file():
@@ -143,8 +157,8 @@ def _store_python(runtime: Path) -> Path | None:
         except (OSError, ValueError):
             entry = None
         if entry:
-            candidate = runtime / entry / rel
-            if candidate.is_file():
+            candidate = get_package("python").binary(runtime / entry, current_target())
+            if candidate is not None and candidate.is_file():
                 return candidate
 
     return None
@@ -483,7 +497,11 @@ def _launcher_script(name: str, repo_root: Path, dependencies: Path | None) -> s
 
 
 def _write_shell(target: Path, command: list[str]) -> Path | None:
-    body = f'#!/bin/sh\nexec {shlex.join(command)} "$@"\n'
+    prefix = ""
+    library = _termux_library(command[0])
+    if library is not None:
+        prefix = f'export LD_LIBRARY_PATH={shlex.quote(str(library))}${{LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}}\n'
+    body = f'#!/bin/sh\n{prefix}exec {shlex.join(command)} "$@"\n'
     try:
         if not target.is_symlink() and target.read_bytes() == body.encode("utf-8"):
             if os.access(target, os.X_OK):

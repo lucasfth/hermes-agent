@@ -224,6 +224,21 @@ def _base_environment(env: Mapping[str, str] | None = None) -> dict[str, str]:
     return base
 
 
+def _interpreter_environment(python: Path, env: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Termux store interpreters need their own prefix's shared libraries."""
+    base = _base_environment(env)
+    if sys.platform == "android" or hasattr(sys, "getandroidapilevel"):
+        library = str(python.resolve().parent.parent / "lib")
+        # LD_LIBRARY_PATH for the loader; LIBRARY_PATH so native extension
+        # builds (maturin/cargo, cc) can link -lpythonX.Y from the store prefix.
+        for key in ("LD_LIBRARY_PATH", "LIBRARY_PATH"):
+            paths = [part for part in base.get(key, "").split(os.pathsep)
+                     if part and part != library]
+            base[key] = os.pathsep.join([library, *paths])
+    return base
+
+
+
 def managed_environment(destination: Path, *, python: Path | None = None,
                         cache: Path | None = None, env: Mapping[str, str] | None = None,
                         offline: bool = False, explicit: bool = False,
@@ -236,7 +251,7 @@ def managed_environment(destination: Path, *, python: Path | None = None,
         raise InstallError("venv", "PM's pinned toolchain is unavailable")
     uv, pinned_python = tools
     python = pinned_python if python is None else python.absolute()
-    build_env = _base_environment(env)
+    build_env = _interpreter_environment(python, env)
     if sys.platform == "darwin" and python.resolve() == pinned_python.resolve():
         # PBS's AR still names its deleted build directory. Its CC is already
         # clang; only the archiver needs a default, and only for our interpreter.
@@ -285,7 +300,7 @@ class PythonEnvironment:
     def _run(self, args: list[str], *, cwd: Path, timeout: int) -> subprocess.CompletedProcess:
         # Explicit index credentials survive, but cannot redirect the project,
         # interpreter or cache selected by the operation.
-        env = _base_environment(self.env)
+        env = _interpreter_environment(self.python, self.env)
         if self.no_config:
             # --no-config only removes config files; the pip-mirror bridge
             # (pm.index_config) reaches uv as env vars. The pinned runtime

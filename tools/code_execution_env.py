@@ -183,6 +183,13 @@ def _build_child_env(*, rpc_endpoint: str, rpc_token: str, tmpdir: str,
     if _existing_pp:
         _pp_parts.append(_existing_pp)
     child_env["PYTHONPATH"] = os.pathsep.join(_pp_parts)
+    # A Termux store interpreter (and venvs built from it) cannot start without its own lib dir:
+    # LD_LIBRARY_PATH is not in _SAFE_ENV_PREFIXES, so the scrub above always drops it.
+    from hermes_cli._launchers import _termux_library
+    _library = _termux_library(child_python)
+    if _library is not None:
+        _inherited = [p for p in os.environ.get("LD_LIBRARY_PATH", "").split(os.pathsep) if p and p != str(_library)]
+        child_env["LD_LIBRARY_PATH"] = os.pathsep.join([str(_library), *_inherited])
     return child_env
 
 

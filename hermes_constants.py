@@ -765,9 +765,14 @@ def socket_safe_tmpdir() -> str:
     if sys.platform == "darwin":
         return "/tmp"  # no-tmp: ok — AF_UNIX 104-byte socket path limit on darwin
     candidate = tempfile.gettempdir()
-    if len(candidate) <= SOCKET_TMPDIR_MAX_LEN or not os.path.isdir("/tmp"):  # no-tmp: ok — probe, not a write target
+    if len(candidate) <= SOCKET_TMPDIR_MAX_LEN:
         return candidate
-    return "/tmp"  # no-tmp: ok — AF_UNIX 108-byte socket path limit on Linux
+    # Termux (and other sandboxed hosts) expose a /tmp this user cannot create sockets in; its
+    # own short, private $PREFIX/tmp is the equivalent root there.
+    for root in ("/tmp", os.path.join(os.environ.get("PREFIX", ""), "tmp") if os.environ.get("PREFIX") else ""):  # no-tmp: ok — AF_UNIX 108-byte socket path limit on Linux
+        if root and len(root) <= SOCKET_TMPDIR_MAX_LEN and os.path.isdir(root) and os.access(root, os.W_OK | os.X_OK):
+            return root
+    return candidate
 
 
 # ---- Managed mode (NixOS declarative config) ----
