@@ -104,6 +104,33 @@ def test_exec_approval_ORDINARY_failure_still_falls_back_to_text():
     assert len(adapter.text_sends) == 1
     assert "rm -rf /" in adapter.text_sends[0]
 
+def test_exec_approval_text_fallback_failure_unblocks_the_gate():
+    """A failed fallback cannot leave an invisible approval pending."""
+    adapter = _Adapter(SendResult(success=False, error="card failed"))
+
+    async def fail_send(*_a: Any, **_k: Any) -> SendResult:
+        raise RuntimeError("text transport down")
+
+    adapter.send = fail_send
+    runner = _runner(adapter)
+
+    with pytest.raises(RuntimeError, match="could not be delivered"):
+        runner._approval_notify_sync(dict(APPROVAL))
+
+
+def test_exec_approval_text_fallback_unsuccessful_result_unblocks_the_gate():
+    """An unsuccessful text SendResult is the same as a transport exception."""
+    adapter = _Adapter(SendResult(success=False, error="card failed"))
+
+    async def unsuccessful_send(*_a: Any, **_k: Any) -> SendResult:
+        return SendResult(success=False, error="text transport down")
+
+    adapter.send = unsuccessful_send
+    runner = _runner(adapter)
+
+    with pytest.raises(RuntimeError, match="could not be delivered"):
+        runner._approval_notify_sync(dict(APPROVAL))
+
 
 # ── slash confirm ───────────────────────────────────────────────────────────
 

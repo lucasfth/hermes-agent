@@ -824,10 +824,14 @@ def _human_decision(spec: _GateSpec, *, command: str, description: str,
                 return deny(spec.transport_denied, "denied")
             return grant(choice)
 
-    # Gateway/async approval: block the agent thread until /approve or /deny, mirroring the CLI's synchronous input()
-    # flow. The agent never sees "approval_required" here — it gets output or a definitive BLOCKED.
-    if is_gateway or is_ask:
-        # Redacted copies for user-visible rendering only (the gateway paints them into Discord/Slack); the raw
+    # Delegated children have no independently registered gateway surface.
+    # Use their worker-local callback instead of borrowing the parent queue.
+    try:
+        from agent.delegation_context import is_delegated_child_context
+        delegated_child = is_delegated_child_context()
+    except Exception:  # Fail closed if child-context detection is unavailable.
+        delegated_child = True
+    if (is_gateway or is_ask) and not delegated_child:
         # command still executes after approval and persistence keys off pattern_key.
         display_command = redact_sensitive_text(command)
         display_description = redact_sensitive_text(description)

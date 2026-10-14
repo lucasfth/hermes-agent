@@ -1774,6 +1774,42 @@ class TestApprovalTimeoutIsNotConsent:
         assert mod.list_gateway_approvals(self.SESSION_KEY) == []
 
 
+class TestDelegatedChildApprovalSurface:
+    """A child must use its worker-local callback, not the parent gateway queue."""
+
+    def test_child_gateway_context_uses_worker_callback_not_pending_queue(self, monkeypatch):
+        from agent.delegation_context import delegated_child_context
+        from tools import approval as mod
+        from tools.terminal_tool import set_approval_callback
+
+        seen = []
+        mod._gateway_queues.clear()
+        mod._gateway_notify_cbs.clear()
+        mod._pending.clear()
+        monkeypatch.setenv("HERMES_GATEWAY_SESSION", "1")
+        monkeypatch.setenv("HERMES_SESSION_KEY", "parent-gateway-session")
+        monkeypatch.setattr(mod, "_YOLO_MODE_FROZEN", False)
+        monkeypatch.setattr(approval_context, "_get_approval_config", lambda: {"mode": "manual", "timeout": 60})
+
+        def deny(command, description, **_kwargs):
+            seen.append((command, description))
+            return "deny"
+
+        set_approval_callback(deny)
+        try:
+            with delegated_child_context("child-session"):
+                result = mod.check_all_command_guards("rm -rf .git", "local")
+        finally:
+            set_approval_callback(None)
+            mod._gateway_queues.clear()
+            mod._gateway_notify_cbs.clear()
+            mod._pending.clear()
+
+        assert seen
+        assert result["approved"] is False
+        assert result["outcome"] == "denied"
+        assert result.get("status") != "pending_approval"
+
 # =========================================================================
 # Coalesce identical concurrent approvals — one prompt, one answer.
 # Port of anomalyco/opencode#40869 (deduplicate websearch consent prompts):

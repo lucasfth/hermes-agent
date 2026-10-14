@@ -1541,13 +1541,18 @@ class TurnRunner:
             fut = self._schedule(
                 adapter.send(ctx._status_chat_id, msg, metadata=_interim_metadata(metadata)), "Approval text-send scheduling error",
             )
-            if fut is not None:
-                fut.result(timeout=15)
-                # No card to edit on the text path: the prompt has no buttons to drop and carries
-                # the /approve instructions, so the timeout notice is posted as a new message.
-                register_timeout_notice(self, approval_data, command=cmd, card_message_id=None)
+            if fut is None:
+                raise RuntimeError("approval text-send scheduling failed")
+            result = fut.result(timeout=15)
+            if not getattr(result, "success", False):
+                raise RuntimeError(f"approval text-send failed: {getattr(result, 'error', 'unknown error')}")
+            # No card to edit on the text path: the prompt has no buttons to drop and carries
+            # the /approve instructions, so the timeout notice is posted as a new message.
+            register_timeout_notice(self, approval_data, command=cmd, card_message_id=None)
         except Exception as e:
             logger.error("Failed to send approval request: %s", e)
+            # Notify failure must escape to _await_gateway_decision so its pending entry is removed.
+            raise RuntimeError("approval request could not be delivered") from e
 
     # ── run_sync phases ─────────────────────────────────────────────────────────────────────
 
